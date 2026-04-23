@@ -6,25 +6,18 @@ import numpy as np
 from PIL import Image
 from huggingface_hub import hf_hub_download
 
-# -----------------------------
-# Page Config
-# -----------------------------
 st.set_page_config(
-    page_title="Pix2Pix Image Translation",
+    page_title="Pix2Pix Image Translator",
     page_icon="🎨",
     layout="wide"
 )
 
-# -----------------------------
-# Styling
-# -----------------------------
 st.markdown("""
 <style>
     .stApp {
         background: linear-gradient(135deg, #0b1020, #111827, #1f2937);
         color: white;
     }
-
     .main-title {
         font-size: 3.2rem;
         font-weight: 800;
@@ -34,14 +27,12 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
     }
-
     .sub-title {
         text-align: center;
         font-size: 1.05rem;
         color: #cbd5e1;
         margin-bottom: 2rem;
     }
-
     .glass-card {
         background: rgba(255, 255, 255, 0.06);
         border: 1px solid rgba(255, 255, 255, 0.10);
@@ -49,44 +40,19 @@ st.markdown("""
         padding: 1.2rem;
         box-shadow: 0 8px 28px rgba(0, 0, 0, 0.30);
     }
-
-    .info-box {
-        background: rgba(96, 165, 250, 0.12);
-        border: 1px solid rgba(96, 165, 250, 0.25);
-        border-radius: 14px;
-        padding: 0.9rem 1rem;
-        margin-top: 0.5rem;
-        color: #dbeafe;
-    }
-
-    .footer-note {
-        text-align: center;
-        font-size: 0.92rem;
-        color: #94a3b8;
-        margin-top: 2rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------
-# Header
-# -----------------------------
 st.markdown('<div class="main-title">🎨 Pix2Pix Image Translator</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">Upload an image and generate the translated output using your trained Pix2Pix generator from Hugging Face.</div>',
+    '<div class="sub-title">Upload an image and generate the translated output using your trained Pix2Pix generator.</div>',
     unsafe_allow_html=True
 )
 
-# -----------------------------
-# Settings
-# -----------------------------
 img_size = 128
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# -----------------------------
-# Model Classes
-# Exact architecture based on your notebook app.py cell
-# -----------------------------
+
 class Down(nn.Module):
     def __init__(self, a, b, norm=True):
         super().__init__()
@@ -128,18 +94,12 @@ class Gen(nn.Module):
         self.d6 = Down(512, 512)
         self.d7 = Down(512, 512)
 
-        self.bot = nn.Sequential(
-            nn.Conv2d(512, 512, 4, 2, 1, bias=False),
-            nn.ReLU(True)
-        )
-
         self.u1 = Up(512, 512, drop=True)
         self.u2 = Up(1024, 512, drop=True)
         self.u3 = Up(1024, 512, drop=True)
-        self.u4 = Up(1024, 512)
-        self.u5 = Up(1024, 256)
-        self.u6 = Up(512, 128)
-        self.u7 = Up(256, 64)
+        self.u4 = Up(1024, 256)
+        self.u5 = Up(512, 128)
+        self.u6 = Up(256, 64)
 
         self.last = nn.Sequential(
             nn.ConvTranspose2d(128, 3, 4, 2, 1),
@@ -155,22 +115,17 @@ class Gen(nn.Module):
         d6 = self.d6(d5)
         d7 = self.d7(d6)
 
-        b = self.bot(d7)
+        u1 = self.u1(d7)
+        u2 = self.u2(torch.cat([u1, d6], dim=1))
+        u3 = self.u3(torch.cat([u2, d5], dim=1))
+        u4 = self.u4(torch.cat([u3, d4], dim=1))
+        u5 = self.u5(torch.cat([u4, d3], dim=1))
+        u6 = self.u6(torch.cat([u5, d2], dim=1))
 
-        u1 = self.u1(b)
-        u2 = self.u2(torch.cat([u1, d7], dim=1))
-        u3 = self.u3(torch.cat([u2, d6], dim=1))
-        u4 = self.u4(torch.cat([u3, d5], dim=1))
-        u5 = self.u5(torch.cat([u4, d4], dim=1))
-        u6 = self.u6(torch.cat([u5, d3], dim=1))
-        u7 = self.u7(torch.cat([u6, d2], dim=1))
-
-        out = self.last(torch.cat([u7, d1], dim=1))
+        out = self.last(torch.cat([u6, d1], dim=1))
         return out
 
-# -----------------------------
-# Image Preprocess / Postprocess
-# -----------------------------
+
 def preprocess_image(image):
     image = image.convert("RGB")
     image = image.resize((img_size, img_size))
@@ -189,18 +144,16 @@ def postprocess_tensor(tensor):
     tensor = (tensor * 255).astype(np.uint8)
     return Image.fromarray(tensor)
 
-# -----------------------------
-# Load Generator from Hugging Face
-# -----------------------------
+
 @st.cache_resource
 def load_model():
     repo_id = "supremeproducts45/generatorpix2pix"
 
     possible_files = [
-        
-        
+        "g_final.pth",
+        "generator.pth",
         "model.pth",
-        
+        "pytorch_model.bin"
     ]
 
     model_path = None
@@ -215,53 +168,33 @@ def load_model():
 
     if model_path is None:
         raise FileNotFoundError(
-            "Generator weight file not found in Hugging Face repo. "
-            "Make sure your repo contains g_final.pth or update the filename list."
+            "Generator weight file not found in Hugging Face repo."
         ) from last_error
 
     model = Gen().to(device)
     state = torch.load(model_path, map_location=device)
-    model.load_state_dict(state)
+
+    if isinstance(state, dict) and "state_dict" in state:
+        model.load_state_dict(state["state_dict"])
+    else:
+        model.load_state_dict(state)
+
     model.eval()
     return model
 
-# -----------------------------
-# Sidebar
-# -----------------------------
+
 with st.sidebar:
-    st.markdown("## ⚙️ Model Details")
-    st.write("**Generator Repo**")
+    st.markdown("## ⚙️ Model Info")
     st.code("supremeproducts45/generatorpix2pix")
+    st.write("Input size: 128 × 128")
+    st.write("Only generator is used for inference.")
 
-    st.write("**Discriminator Repo**")
-    st.code("supremeproducts45/discriminatorpix2pix")
-
-    st.markdown(
-        """
-        <div class="info-box">
-        For inference, only the generator is used.<br><br>
-        The discriminator is usually only needed during training.
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.markdown("---")
-    st.write("**Image Size**")
-    st.write("128 × 128")
-
-# -----------------------------
-# Main Layout
-# -----------------------------
 left, right = st.columns(2, gap="large")
 
 with left:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.subheader("📤 Upload Input Image")
-    uploaded_file = st.file_uploader(
-        "Choose an image",
-        type=["png", "jpg", "jpeg"]
-    )
+    uploaded_file = st.file_uploader("Choose an image", type=["png", "jpg", "jpeg"])
     st.markdown('</div>', unsafe_allow_html=True)
 
 with right:
@@ -270,9 +203,6 @@ with right:
     generate_btn = st.button("Generate Image", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# -----------------------------
-# Inference
-# -----------------------------
 if uploaded_file is not None:
     input_image = Image.open(uploaded_file).convert("RGB")
 
@@ -302,6 +232,7 @@ if uploaded_file is not None:
 
                 buf = io.BytesIO()
                 output_image.save(buf, format="PNG")
+
                 st.download_button(
                     label="⬇ Download Output",
                     data=buf.getvalue(),
@@ -317,11 +248,3 @@ if uploaded_file is not None:
             st.error(f"Error: {e}")
 else:
     st.info("Upload an image first, then click Generate Image.")
-
-# -----------------------------
-# Footer
-# -----------------------------
-st.markdown(
-    '<div class="footer-note">Built with Streamlit • Powered by Pix2Pix Generator on Hugging Face</div>',
-    unsafe_allow_html=True
-)
